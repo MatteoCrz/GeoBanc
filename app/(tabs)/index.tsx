@@ -1,75 +1,159 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { HelloWave } from '@/components/HelloWave';
-import ParallaxScrollView from '@/components/ParallaxScrollView';
-import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import axios from 'axios';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { StyleSheet, View, Text, ActivityIndicator } from 'react-native';
+import MapView, { Marker, Region } from 'react-native-maps';
+import * as Location from 'expo-location';
+import { debounce } from 'lodash';
+
+const getZoomLevel = (longitudeDelta: number) => {
+  return Math.floor(Math.log2(360 / longitudeDelta));
+};
 
 export default function HomeScreen() {
+  const [mapRegion, setMapRegion] = useState<Region | null>(null);
+  const [points, setPoints] = useState<any[]>([]);
+  const mapRef = useRef<MapView>(null);
+
+  // 1. Center map on user location on initial load
+  useEffect(() => {
+    const locateUser = async () => {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        console.error('Permission to access location was denied');
+        setMapRegion({
+          latitude: 48.8566,
+          longitude: 2.3522,
+          latitudeDelta: 0.0922,
+          longitudeDelta: 0.0421,
+        });
+        return;
+      }
+
+      let location = await Location.getCurrentPositionAsync({});
+      setMapRegion({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      });
+    };
+    locateUser();
+  }, []);
+
+  // 2. Function to fetch clusters/benches from the backend
+  const fetchPoints = useCallback(async (region: Region) => {
+    if (!mapRef.current) return;
+
+    try {
+      const boundaries = await mapRef.current.getMapBoundaries();
+      const bbox = [
+        boundaries.southWest.longitude,
+        boundaries.southWest.latitude,
+        boundaries.northEast.longitude,
+        boundaries.northEast.latitude,
+      ].join(',');
+
+      const zoom = getZoomLevel(region.longitudeDelta);
+
+      const response = await axios.get(
+        `${process.env.EXPO_PUBLIC_API_URL}/benches?zoom=${zoom}&bbox=${bbox}`,
+      );
+      console.log('Data received from API:', JSON.stringify(response.data.features, null, 2));
+      setPoints(response.data.features);
+    } catch (error) {
+      console.error('Failed to fetch points:', error);
+    }
+  }, []);
+
+  // 3. Debounced version of the fetch function
+  const debouncedFetchPoints = useRef(debounce(fetchPoints, 300)).current;
+
+
+
+  console.log(`Rendering component with ${points.length} points.`);
+
+  if (!mapRegion) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+    <ThemedView style={styles.container}>
+      <MapView
+        ref={mapRef}
+        style={styles.map}
+        initialRegion={mapRegion}
+        showsUserLocation={true}
+        onMapReady={() => mapRegion && fetchPoints(mapRegion)}
+        onRegionChangeComplete={debouncedFetchPoints}
+      >
+        {points
+        .filter(point => {
+          if (!point || !point.geometry || !point.geometry.coordinates) return false;
+          const [longitude, latitude] = point.geometry.coordinates;
+          if (!isFinite(latitude) || !isFinite(longitude)) {
+            console.warn('Invalid coordinates found, filtering point:', JSON.stringify(point));
+            return false;
+          }
+          return true;
+        })
+        .map(point => {
+          try {
+            const [longitude, latitude] = point.geometry.coordinates;
+            const coordinate = { latitude, longitude };
+
+            if (point.properties.cluster) {
+              return (
+                <Marker coordinate={coordinate} key={point.id}>
+                  <View style={styles.clusterContainer}>
+                    <Text style={styles.clusterText}>{String(point.properties.point_count)}</Text>
+                  </View>
+                </Marker>
+              );
+            }
+
+            return (
+              <Marker
+                key={point.id}
+                coordinate={coordinate}
+              />
+            );
+          } catch (e) {
+            console.error('CRASH INSIDE MAP:', e, 'Point data:', JSON.stringify(point));
+            return null;
+          }
+        })}
+      </MapView>
+    </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
+  container: {
+    flex: 1,
+  },
+  map: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 8,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  clusterContainer: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255, 99, 71, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  clusterText: {
+    color: 'white',
+    fontWeight: 'bold',
   },
 });
