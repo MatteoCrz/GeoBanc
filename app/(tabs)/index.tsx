@@ -1,4 +1,5 @@
 import { ThemedView } from '@/components/ThemedView';
+import BenchInfoModal from '@/components/BenchInfoModal';
 import axios from 'axios';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { StyleSheet, View, Text, ActivityIndicator } from 'react-native';
@@ -13,6 +14,8 @@ const getZoomLevel = (longitudeDelta: number) => {
 export default function HomeScreen() {
   const [mapRegion, setMapRegion] = useState<Region | null>(null);
   const [points, setPoints] = useState<any[]>([]);
+  const [selectedBench, setSelectedBench] = useState<any>(null);
+  const [modalVisible, setModalVisible] = useState(false);
   const mapRef = useRef<MapView>(null);
 
   // 1. Center map on user location on initial load
@@ -79,6 +82,48 @@ export default function HomeScreen() {
   // 3. Debounced version of the fetch function
   const debouncedFetchPoints = useRef(debounce(fetchPoints, 300)).current;
 
+  // 4. Function to fetch bench details
+  const fetchBenchDetails = useCallback(async (benchId: string) => {
+    try {
+      const response = await axios.get(
+        `${process.env.EXPO_PUBLIC_API_URL}/benches/${benchId}`,
+        { timeout: 5000 }
+      );
+      console.log('Bench details received:', JSON.stringify(response.data, null, 2));
+      setSelectedBench(response.data);
+      setModalVisible(true);
+    } catch (error) {
+      console.error('Failed to fetch bench details:', error);
+      // Fallback: show basic info if API fails
+      const basicInfo = points.find(p => p.properties.benchId === benchId);
+      if (basicInfo) {
+        setSelectedBench({
+          id: benchId,
+          location: basicInfo.geometry,
+          average_rating: 0,
+          ratings_count: 0,
+          properties: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          ratings: [],
+          photos: [],
+        });
+        setModalVisible(true);
+      }
+    }
+  }, [points]);
+
+  // 5. Handle marker press
+  const handleMarkerPress = useCallback((point: any) => {
+    if (point.properties.cluster) {
+      // For clusters, you might want to zoom in instead
+      console.log('Cluster clicked with', point.properties.point_count, 'points');
+    } else {
+      // For individual benches, show details
+      fetchBenchDetails(point.properties.benchId);
+    }
+  }, [fetchBenchDetails]);
+
 
 
   console.log(`Rendering component with ${points.length} points.`);
@@ -119,7 +164,11 @@ export default function HomeScreen() {
 
             if (point.properties.cluster) {
               return (
-                <Marker coordinate={coordinate} key={point.id}>
+                <Marker 
+                  coordinate={coordinate} 
+                  key={point.id}
+                  onPress={() => handleMarkerPress(point)}
+                >
                   <View style={styles.clusterContainer}>
                     <Text style={styles.clusterText}>{String(point.properties.point_count)}</Text>
                   </View>
@@ -131,6 +180,7 @@ export default function HomeScreen() {
               <Marker
                 key={point.id}
                 coordinate={coordinate}
+                onPress={() => handleMarkerPress(point)}
               />
             );
           } catch (e) {
@@ -139,6 +189,15 @@ export default function HomeScreen() {
           }
         })}
       </MapView>
+      
+      <BenchInfoModal
+        visible={modalVisible}
+        bench={selectedBench}
+        onClose={() => {
+          setModalVisible(false);
+          setSelectedBench(null);
+        }}
+      />
     </ThemedView>
   );
 }
