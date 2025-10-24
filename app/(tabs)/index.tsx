@@ -58,11 +58,21 @@ export default function HomeScreen() {
 
       const response = await axios.get(
         `${process.env.EXPO_PUBLIC_API_URL}/benches?zoom=${zoom}&bbox=${bbox}`,
+        { timeout: 5000 }
       );
       console.log('Data received from API:', JSON.stringify(response.data.features, null, 2));
       setPoints(response.data.features);
     } catch (error) {
-      console.error('Failed to fetch points:', error);
+      // Gestion d'erreur - l'API backend n'est pas accessible
+      if (axios.isAxiosError(error)) {
+        if (error.code === 'NETWORK_ERROR' || error.code === 'ECONNABORTED') {
+          console.warn('API backend not available at', process.env.EXPO_PUBLIC_API_URL);
+        } else {
+          console.warn('API error:', error.message);
+        }
+      }
+      // On garde un tableau vide si l'API n'est pas disponible
+      setPoints([]);
     }
   }, []);
 
@@ -72,6 +82,7 @@ export default function HomeScreen() {
 
 
   console.log(`Rendering component with ${points.length} points.`);
+  console.log('API URL configured:', process.env.EXPO_PUBLIC_API_URL);
 
   if (!mapRegion) {
     return (
